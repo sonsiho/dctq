@@ -1,0 +1,151 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: members
+    // Document ID: Firestore auto ID or imported sample ID.
+    // Fields:
+    //   - registeredAt: timestamp, required
+    //   - zaloName: string, required, 1-80 chars
+    //   - gameName: string, required, 1-80 chars
+    //   - gameId: string, required, 1-40 chars
+    //   - gemLimitGold/gemLimitPurple/gemNormalGold/gemNormalPurple:
+    //     number, required, 0-999
+    //   - gearHp/gearAtk: number, required, 0-999999
+    //   - resistShu/resistWu/resistWei/resistQun: number, required, 0-100
+    //   - slayShu/slayWu/slayWei/slayQun: number, required, 0-100
+    //   - powerScore: number, required, 0-9999999
+    //   - createdAt: timestamp, required, immutable
+    //   - createdBy: string auth UID, required, immutable
+    //   - updatedAt: timestamp, required, must equal request.time
+    //   - updatedBy: string auth UID, required, must equal request.auth.uid
+    //
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function uidUnchanged() {
+      return !('createdBy' in request.resource.data) ||
+        request.resource.data.createdBy == request.auth.uid;
+    }
+
+    function uidNotModified() {
+      return !('createdBy' in request.resource.data) ||
+        request.resource.data.createdBy == resource.data.createdBy;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function validString(value, minLen, maxLen) {
+      return value is string && value.size() >= minLen && value.size() <= maxLen;
+    }
+
+    function validUid(value) {
+      return validString(value, 1, 128);
+    }
+
+    function validNumber(value, minValue, maxValue) {
+      return value is number && value >= minValue && value <= maxValue;
+    }
+
+    function memberFields() {
+      return [
+        'registeredAt',
+        'zaloName',
+        'gameName',
+        'gameId',
+        'gemLimitGold',
+        'gemLimitPurple',
+        'gemNormalGold',
+        'gemNormalPurple',
+        'gearHp',
+        'gearAtk',
+        'resistShu',
+        'resistWu',
+        'resistWei',
+        'resistQun',
+        'slayShu',
+        'slayWu',
+        'slayWei',
+        'slayQun',
+        'powerScore',
+        'createdAt',
+        'createdBy',
+        'updatedAt',
+        'updatedBy',
+      ];
+    }
+
+    function isValidMember(data) {
+      return hasOnlyAllowedFields(memberFields()) &&
+        hasRequiredFields(memberFields()) &&
+        data.registeredAt is timestamp &&
+        validString(data.zaloName, 1, 80) &&
+        validString(data.gameName, 1, 80) &&
+        validString(data.gameId, 1, 40) &&
+        validNumber(data.gemLimitGold, 0, 999) &&
+        validNumber(data.gemLimitPurple, 0, 999) &&
+        validNumber(data.gemNormalGold, 0, 999) &&
+        validNumber(data.gemNormalPurple, 0, 999) &&
+        validNumber(data.gearHp, 0, 999999) &&
+        validNumber(data.gearAtk, 0, 999999) &&
+        validNumber(data.resistShu, 0, 100) &&
+        validNumber(data.resistWu, 0, 100) &&
+        validNumber(data.resistWei, 0, 100) &&
+        validNumber(data.resistQun, 0, 100) &&
+        validNumber(data.slayShu, 0, 100) &&
+        validNumber(data.slayWu, 0, 100) &&
+        validNumber(data.slayWei, 0, 100) &&
+        validNumber(data.slayQun, 0, 100) &&
+        validNumber(data.powerScore, 0, 9999999) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        validUid(data.createdBy) &&
+        validUid(data.updatedBy);
+    }
+
+    match /members/{memberId} {
+      allow read: if isAuthenticated();
+
+      allow create: if isAuthenticated() &&
+        isValidMember(request.resource.data) &&
+        uidUnchanged() &&
+        isOwner(request.resource.data.createdBy) &&
+        isOwner(request.resource.data.updatedBy) &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time;
+
+      allow update: if isAuthenticated() &&
+        isValidMember(request.resource.data) &&
+        uidNotModified() &&
+        request.resource.data.createdBy == resource.data.createdBy &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        isOwner(request.resource.data.updatedBy) &&
+        request.resource.data.updatedAt == request.time;
+
+      allow delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
