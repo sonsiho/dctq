@@ -1,3 +1,10 @@
+# Pre
+- Task ban đầu là task-init.md
+- Các task change request thay đổi theo cấu trúc task-{{number}} với number tăng dần đại diện cho lịch sử thay đổi yêu cầu.
+- Mỗi khi thực thi xong task thì tự động tạo file task-{{number}} để lưu trữ lịch sử change request.
+- Sau khi thực thi xong tự động test và deploy lên https://dctq-69844.web.app/.
+
+# Task
 Hãy xây dựng một ứng dụng web (Dashboard) Quản lý và Phân tích Chỉ số Sự kiện cho Quân Đoàn AEVN dựa trên cấu trúc dữ liệu dưới đây. Hệ thống cần được thiết kế hiện đại, responsive, trực quan hóa dữ liệu bằng biểu đồ và hỗ trợ bộ lọc thông minh.
 
 [CẤU TRÚC DỮ LIỆU ĐẦU VÀO]
