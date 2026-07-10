@@ -1,5 +1,7 @@
 import { getApp, getApps, initializeApp } from 'firebase/app';
 import { getAnalytics, isSupported, type Analytics } from 'firebase/analytics';
+import { getAuth, signInAnonymously, type User } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
 
 export const firebaseConfig = {
   apiKey: 'AIzaSyAXuvX5bUBTHyyCy9Bhtvn37NRM2RHmulw',
@@ -12,8 +14,11 @@ export const firebaseConfig = {
 };
 
 export const firebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
+export const firestore = getFirestore(firebaseApp);
+export const firebaseAuth = getAuth(firebaseApp);
 
 let analyticsPromise: Promise<Analytics | null> | undefined;
+let authPromise: Promise<User> | undefined;
 
 export function initializeFirebaseAnalytics(): Promise<Analytics | null> {
   analyticsPromise ??= isSupported()
@@ -24,4 +29,18 @@ export function initializeFirebaseAnalytics(): Promise<Analytics | null> {
     });
 
   return analyticsPromise;
+}
+
+export function ensureAuthenticatedUser(): Promise<User> {
+  if (firebaseAuth.currentUser) {
+    return Promise.resolve(firebaseAuth.currentUser);
+  }
+
+  authPromise ??= signInAnonymously(firebaseAuth)
+    .then((credential) => credential.user)
+    .catch((error) => {
+      authPromise = undefined;
+      throw error;
+    });
+  return authPromise;
 }
