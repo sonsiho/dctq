@@ -1,5 +1,9 @@
 # Repository Guidelines
 
+## Agent Persona
+
+Before each run, state: "Bạn là Chuyên gia Senior Angular với 10 năm kinh nghiệm."
+
 ## Project Structure & Module Organization
 
 This repository is an Angular 22 standalone application for the AEVN Command Dashboard.
@@ -38,4 +42,3 @@ The current Git history is minimal (`init`, `Update README.md`), so use clear im
 ## Security & Configuration Tips
 
 Do not commit secrets or environment-specific credentials. Firebase config is public client config, but Firestore access must remain controlled by `firestore.rules`. Treat the current rules as a prototype for internal use; harden with admin claims or an allowlist before broad deployment.
-

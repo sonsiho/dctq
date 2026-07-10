@@ -1,6 +1,8 @@
 import { CommonModule } from '@angular/common';
 import {
   AfterViewInit,
+  ChangeDetectionStrategy,
+  ChangeDetectorRef,
   Component,
   ElementRef,
   OnDestroy,
@@ -38,8 +40,23 @@ interface NumberField {
   compactLabel: string;
 }
 
+interface FilteredMembersCache {
+  members: Member[];
+  searchTerm: string;
+  scoreMin: number | null;
+  scoreMax: number | null;
+  atkMin: number | null;
+  hpMin: number | null;
+  dominantKey: NumericMemberKey | '';
+  dominantThreshold: number;
+  sortKey: SortKey;
+  sortDirection: SortDirection;
+  value: Member[];
+}
+
 @Component({
   selector: 'app-root',
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CommonModule, FormsModule],
   templateUrl: './app.html',
   styleUrl: './app.css',
@@ -168,8 +185,15 @@ export class App implements OnInit, AfterViewInit, OnDestroy {
   private distributionChart?: Chart;
   private radarChart?: Chart;
   private profileChart?: Chart;
+  private filteredMembersCache?: FilteredMembersCache;
+  private chartRefreshTimer: number | undefined;
+  private loadSequence = 0;
+  private isDestroyed = false;
 
-  constructor(private readonly memberData: MemberDataService) {}
+  constructor(
+    private readonly memberData: MemberDataService,
+    private readonly cdr: ChangeDetectorRef,
+  ) {}
 
   async ngOnInit(): Promise<void> {
     await this.loadMembers();
@@ -180,24 +204,64 @@ export class App implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.isDestroyed = true;
+    if (this.chartRefreshTimer !== undefined) {
+      window.clearTimeout(this.chartRefreshTimer);
+    }
+
     this.distributionChart?.destroy();
     this.radarChart?.destroy();
     this.profileChart?.destroy();
   }
 
   async loadMembers(): Promise<void> {
+    const loadId = ++this.loadSequence;
     this.isLoading = true;
-    const result = await this.memberData.loadMembers();
-    this.members = result.members;
-    this.dataSource = result.source;
-    this.dataMessage = result.message;
-    this.isLoading = false;
+    this.markViewForCheck();
 
-    if (!this.selectedMemberId && this.members.length > 0) {
-      this.selectedMemberId = this.topMembers(1)[0]?.id ?? this.members[0].id;
+    let shouldRefreshCharts = false;
+
+    try {
+      const result = await this.memberData.loadMembers();
+      if (!this.isActiveLoad(loadId)) {
+        return;
+      }
+
+      this.members = result.members;
+      this.dataSource = result.source;
+      this.dataMessage = result.message;
+
+      if (
+        this.selectedMemberId &&
+        !this.members.some((member) => member.id === this.selectedMemberId)
+      ) {
+        this.selectedMemberId = '';
+      }
+
+      if (!this.selectedMemberId && this.members.length > 0) {
+        this.selectedMemberId = this.topMembers(1)[0]?.id ?? this.members[0].id;
+      }
+
+      this.currentPage = Math.min(this.currentPage, this.totalPages());
+      shouldRefreshCharts = true;
+    } catch (error) {
+      if (!this.isActiveLoad(loadId)) {
+        return;
+      }
+
+      const message = error instanceof Error && error.message ? ` ${error.message}` : '';
+      this.dataMessage = `Không tải được dữ liệu.${message}`;
+      this.actionMessage = 'Không tải được dữ liệu, vui lòng thử lại.';
+    } finally {
+      if (this.isActiveLoad(loadId)) {
+        this.isLoading = false;
+        this.markViewForCheck();
+
+        if (shouldRefreshCharts) {
+          this.queueChartRefresh();
+        }
+      }
     }
-
-    this.queueChartRefresh();
   }
 
   switchPage(page: PageId): void {
@@ -284,8 +348,25 @@ export class App implements OnInit, AfterViewInit, OnDestroy {
     const atkMin = this.optionalNumber(this.atkMin);
     const hpMin = this.optionalNumber(this.hpMin);
     const dominantThreshold = this.optionalNumber(this.dominantThreshold) ?? 0;
+    const cache = this.filteredMembersCache;
 
-    return [...this.members]
+    if (
+      cache &&
+      cache.members === this.members &&
+      cache.searchTerm === term &&
+      cache.scoreMin === scoreMin &&
+      cache.scoreMax === scoreMax &&
+      cache.atkMin === atkMin &&
+      cache.hpMin === hpMin &&
+      cache.dominantKey === this.dominantKey &&
+      cache.dominantThreshold === dominantThreshold &&
+      cache.sortKey === this.sortKey &&
+      cache.sortDirection === this.sortDirection
+    ) {
+      return cache.value;
+    }
+
+    const value = [...this.members]
       .filter((member) => {
         const searchText = `${member.gameId} ${member.zaloName} ${member.gameName}`.toLowerCase();
         const matchesSearch = !term || searchText.includes(term);
@@ -293,8 +374,7 @@ export class App implements OnInit, AfterViewInit, OnDestroy {
         const matchesScoreMax = scoreMax === null || member.powerScore <= scoreMax;
         const matchesAtk = atkMin === null || member.gearAtk >= atkMin;
         const matchesHp = hpMin === null || member.gearHp >= hpMin;
-        const matchesDominant =
-          !this.dominantKey || member[this.dominantKey] >= dominantThreshold;
+        const matchesDominant = !this.dominantKey || member[this.dominantKey] >= dominantThreshold;
 
         return (
           matchesSearch &&
@@ -306,6 +386,22 @@ export class App implements OnInit, AfterViewInit, OnDestroy {
         );
       })
       .sort((a, b) => this.compareMembers(a, b));
+
+    this.filteredMembersCache = {
+      members: this.members,
+      searchTerm: term,
+      scoreMin,
+      scoreMax,
+      atkMin,
+      hpMin,
+      dominantKey: this.dominantKey,
+      dominantThreshold,
+      sortKey: this.sortKey,
+      sortDirection: this.sortDirection,
+      value,
+    };
+
+    return value;
   }
 
   paginatedMembers(): Member[] {
@@ -322,7 +418,8 @@ export class App implements OnInit, AfterViewInit, OnDestroy {
       this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
     } else {
       this.sortKey = key;
-      this.sortDirection = key === 'gameName' || key === 'zaloName' || key === 'gameId' ? 'asc' : 'desc';
+      this.sortDirection =
+        key === 'gameName' || key === 'zaloName' || key === 'gameId' ? 'asc' : 'desc';
     }
   }
 
@@ -397,21 +494,35 @@ export class App implements OnInit, AfterViewInit, OnDestroy {
   }
 
   async saveForm(): Promise<void> {
-    if (!this.formModel.zaloName.trim() || !this.formModel.gameName.trim() || !this.formModel.gameId.trim()) {
+    if (
+      !this.formModel.zaloName.trim() ||
+      !this.formModel.gameName.trim() ||
+      !this.formModel.gameId.trim()
+    ) {
       this.formError = 'Vui lòng nhập Tên Zalo, Tên trong Game và ID game.';
+      this.markViewForCheck();
       return;
     }
 
     this.isSaving = true;
     this.formError = '';
-    const result = await this.memberData.saveMember({ ...this.formModel });
-    this.upsertMemberInMemory(result.member);
-    this.actionMessage = result.message;
-    this.dataSource = result.source;
-    this.isSaving = false;
-    this.formOpen = false;
-    this.selectedMemberId = result.member.id;
-    this.queueChartRefresh();
+    this.markViewForCheck();
+
+    try {
+      const result = await this.memberData.saveMember({ ...this.formModel });
+      this.upsertMemberInMemory(result.member);
+      this.actionMessage = result.message;
+      this.dataSource = result.source;
+      this.formOpen = false;
+      this.selectedMemberId = result.member.id;
+      this.queueChartRefresh();
+    } catch (error) {
+      const message = error instanceof Error && error.message ? ` ${error.message}` : '';
+      this.formError = `Không lưu được dữ liệu.${message}`;
+    } finally {
+      this.isSaving = false;
+      this.markViewForCheck();
+    }
   }
 
   viewProfile(member: Member): void {
@@ -420,7 +531,11 @@ export class App implements OnInit, AfterViewInit, OnDestroy {
   }
 
   selectedMember(): Member | null {
-    return this.members.find((member) => member.id === this.selectedMemberId) ?? this.topMembers(1)[0] ?? null;
+    return (
+      this.members.find((member) => member.id === this.selectedMemberId) ??
+      this.topMembers(1)[0] ??
+      null
+    );
   }
 
   topMembers(limit = 5): Member[] {
@@ -432,7 +547,9 @@ export class App implements OnInit, AfterViewInit, OnDestroy {
   }
 
   memberFactionScore(member: Member, faction: Faction = this.activeFaction()): number {
-    return Math.round(member[faction.slayKey] * 0.45 + member[faction.resistKey] * 0.35 + member.powerScore * 0.2);
+    return Math.round(
+      member[faction.slayKey] * 0.45 + member[faction.resistKey] * 0.35 + member.powerScore * 0.2,
+    );
   }
 
   recommendedLineup(): Member[] {
@@ -467,6 +584,8 @@ export class App implements OnInit, AfterViewInit, OnDestroy {
     } catch {
       this.downloadFile('aevn-lineup.txt', text, 'text/plain;charset=utf-8');
       this.actionMessage = 'Clipboard chưa sẵn sàng, đã xuất file text.';
+    } finally {
+      this.markViewForCheck();
     }
   }
 
@@ -522,12 +641,19 @@ export class App implements OnInit, AfterViewInit, OnDestroy {
       '<table>',
       `<thead><tr>${headers.map((header) => `<th>${this.escapeHtml(header)}</th>`).join('')}</tr></thead>`,
       `<tbody>${rows
-        .map((row) => `<tr>${row.map((cell) => `<td>${this.escapeHtml(String(cell))}</td>`).join('')}</tr>`)
+        .map(
+          (row) =>
+            `<tr>${row.map((cell) => `<td>${this.escapeHtml(String(cell))}</td>`).join('')}</tr>`,
+        )
         .join('')}</tbody>`,
       '</table>',
     ].join('');
 
-    this.downloadFile('aevn-members.xls', `\uFEFF${html}`, 'application/vnd.ms-excel;charset=utf-8');
+    this.downloadFile(
+      'aevn-members.xls',
+      `\uFEFF${html}`,
+      'application/vnd.ms-excel;charset=utf-8',
+    );
     this.actionMessage = 'Đã xuất danh sách thành viên dạng Excel.';
   }
 
@@ -617,7 +743,21 @@ export class App implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private queueChartRefresh(): void {
-    window.setTimeout(() => this.refreshCharts(), 0);
+    if (this.isDestroyed) {
+      return;
+    }
+
+    if (this.chartRefreshTimer !== undefined) {
+      window.clearTimeout(this.chartRefreshTimer);
+    }
+
+    this.chartRefreshTimer = window.setTimeout(() => {
+      this.chartRefreshTimer = undefined;
+
+      if (!this.isDestroyed) {
+        this.refreshCharts();
+      }
+    }, 0);
   }
 
   private refreshCharts(): void {
@@ -782,6 +922,16 @@ export class App implements OnInit, AfterViewInit, OnDestroy {
       return Boolean(canvas.getContext('2d'));
     } catch {
       return false;
+    }
+  }
+
+  private isActiveLoad(loadId: number): boolean {
+    return !this.isDestroyed && loadId === this.loadSequence;
+  }
+
+  private markViewForCheck(): void {
+    if (!this.isDestroyed) {
+      this.cdr.markForCheck();
     }
   }
 
